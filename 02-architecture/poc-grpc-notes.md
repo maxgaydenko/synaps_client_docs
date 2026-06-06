@@ -1,4 +1,4 @@
-# PoC: QtGrpc transport (flow A end-to-end)
+# PoC: QtGrpc transport (flows A, C, D end-to-end)
 
 > **Статус:** выполнено ✅ · **Дата:** 2026-06-06 · Закрывает открытые вопросы
 > **Q1** (gRPC-стек) и **Q2** (async-модель) из
@@ -9,29 +9,46 @@
 
 Проверить на реальном коде, что **QtGrpc + QtProtobuf** пригодны как слой
 Data/Transport: кодогенерация из `ddbs_proto`, асинхронный неблокирующий вызов,
-заголовок `user-token`, и сквозной **flow A** (`QLExecuteDirect → QLQueryStatus →
-QLCloseQuery`) против `synaps_mock_server`.
+заголовок `user-token`, и сквозные **flow A / C / D** против `synaps_mock_server`:
+- **A** `executeDirect`: `QLExecuteDirect → QLQueryStatus → QLCloseQuery`;
+- **C** `fetchDirect`: + `QLOntologies → QLFetch`-цикл (до EOF) перед закрытием;
+- **D** `fetch`: как C, но `QLQueryStatus` опрашивается (polling) до выхода из `Executing`.
 
-## Результат: успех
+## Результат: успех (A, C, D — exit 0)
 
+**Flow A** (`SELECT preview_struct FROM datasource WHERE filename='…' AND codepage='UTF-8' AND delimiter=',' AND null_treatment='as_is'`):
 ```
--> QLExecuteDirect: SELECT preview_struct FROM datasource WHERE filename='test_t-30000.csv' AND codepage='UTF-8' AND delimiter=',' AND null_treatment='as_is'
-   channel: http://localhost:5129  (user-token: set)
-   queryId = 774e9089-9fd6-4558-b870-2fe8a9758d31
--> QLQueryStatus
-   On = 1 | Ft = 1 | FetchCursorPosition = 0 | QueryExecutionStatus = Completed
--> QLCloseQuery
-   closed
-=== flow A OK ===   (exit 0)
+-> QLExecuteDirect  =>  queryId = 774e9089-…
+-> QLQueryStatus    =>  QueryExecutionStatus = Completed   (из data[])
+-> QLCloseQuery     =>  closed
+=== flow A OK ===
+```
+
+**Flow C / D** (`SELECT rule_list FROM system` — статический in-memory список):
+```
+-> QLExecuteDirect  =>  queryId = 42e53077-…
+-> QLQueryStatus    =>  Completed            (в D — через "poll 1")
+-> QLOntologies     =>  2 column(s): id, name
+   row 1: On1=string | On2=String
+   row 2: On1=number | On2=Number
+   … (5 rows total)
+   EOF (OutOfRange) after 5 row(s)
+-> QLCloseQuery     =>  closed
+=== flow OK (rows: 5) ===
 ```
 
 Подтверждено end-to-end:
 - кодогенерация QtProtobuf/QtGrpc из `dhgdb.shared.api.proto` **и** `auth.api.proto`;
 - **cleartext HTTP/2 (h2c)** через `QGrpcHttp2Channel("http://…")` против grpc-js
   insecure-сервера — **TLS для локали не нужен**;
-- декодирование `QueryResponse.queryId` и `QueryFact.data[]` (repeated);
+- декодирование `QueryResponse.queryId`, `QueryFact.data[]` (repeated) и
+  `QueryFactCollection.rows` (онтологии);
 - **`QueryExecutionStatus` извлекается из `data[]`** регистронезависимо = `Completed`
   — ровно как в контракте (§4.2 концепции);
+- **выборка данных**: онтологии (колонки) + цикл `QLFetch` по строкам;
+- **EOF = gRPC `OUT_OF_RANGE`** обрабатывается как нормальный конец выборки, не как ошибка;
+- **polling статуса** (flow D) — отдельный путь через `QTimer` (см. оговорку про
+  одну итерацию ниже);
 - `user-token` уезжает в метаданных запроса;
 - **асинхронность без ручных потоков** (см. Q2 ниже).
 
@@ -68,10 +85,13 @@ cd synaps_client && cmake -S . -B build -G Ninja && cmake --build build
 # 2. Mock-сервер (отдельный терминал)
 cd synaps_mock_server && SOURCES_DIR=/Users/ma/wrk/bt/sources PORT=5129 npm start
 
-# 3. Прогон flow A
-SYNAPS_USER_TOKEN=poc-token \
-  synaps_client/build/synaps_client.app/Contents/MacOS/synaps_client \
-  --grpc-selftest "SELECT preview_struct FROM datasource WHERE filename='test_t-30000.csv' AND codepage='UTF-8' AND delimiter=',' AND null_treatment='as_is'"
+# 3. Прогон (флаг --flow: A | C | D; по умолчанию A)
+BIN=synaps_client/build/synaps_client.app/Contents/MacOS/synaps_client
+# Flow C/D (выборка данных):
+SYNAPS_USER_TOKEN=poc-token "$BIN" --grpc-selftest "SELECT rule_list FROM system" --flow C
+SYNAPS_USER_TOKEN=poc-token "$BIN" --grpc-selftest "SELECT rule_list FROM system" --flow D
+# Flow A (без выборки), пример file-based:
+SYNAPS_USER_TOKEN=poc-token "$BIN" --grpc-selftest "SELECT preview_struct FROM datasource WHERE filename='test_t-30000.csv' AND codepage='UTF-8' AND delimiter=',' AND null_treatment='as_is'" --flow A
 # endpoint можно переопределить: SYNAPS_ENDPOINT=http://host:port
 ```
 
@@ -88,10 +108,11 @@ SYNAPS_USER_TOKEN=poc-token \
    (`-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF`).
    Для CI/воспроизводимости — **зафиксировать одну версию Qt** (проект задокументирован
    под 6.10; решить отдельно, см. ниже).
-3. **Mock-сервер не реализует Auth-сервис** — только `DHGDBSharedAPI`. Живой
-   `Auth.Login` локально проверить не на чем; codegen `auth.api.proto` при этом
-   компилируется без проблем (Auth-биндинги генерируются). Живой Login — когда будет
-   доступен реальный auth-эндпоинт.
+3. **Auth-сервис — отдельный мок**, запускается отдельно от `synaps_mock_server`, и
+   его поддержка пока **необязательна**; именно поэтому в `synaps_mock_server`
+   проверка `user-token` сейчас не обязательна. В этом PoC живой `Auth.Login` не
+   гонялся, но codegen `auth.api.proto` компилируется без проблем (Auth-биндинги
+   генерируются). Живой Login — отдельным инкрементом против auth-мока.
 4. **Часть `… FROM system`-запросов в mock ходит в Postgres** (`DATABASE_URL`/
    `PGPASSWORD`); без БД они падают с `SASL … client password must be a string`
    (gRPC `INTERNAL`). Файловые `preview`/`datasource`-запросы работают in-memory из
@@ -101,11 +122,14 @@ SYNAPS_USER_TOKEN=poc-token \
 
 ## Что НЕ проверялось (следующие инкременты)
 
-- Flow C/D: `QLOntologies` + цикл `QLFetch` + обработка **EOF как `OUT_OF_RANGE`**.
-- Polling статуса (non-direct) с интервалом/таймаутом.
-- Отмена (`QLCancelQuery`) и гард на произвольную отмену (см. §4.5 концепции).
-- Живой `Auth.Login` против реального auth-сервиса.
-- Сборка/прогон на Windows и Linux (PoC выполнен на macOS).
+- **Polling с реальным `Executing`.** Flow D проходит код polling, но т.к. старт —
+  всегда `QLExecuteDirect` (решение Q6), mock отдаёт `Completed` уже на первом
+  `QLQueryStatus`, поэтому цикл сходится за одну итерацию. Многократный `Executing→
+  Completed` (через `QTimer`) кодом поддержан, но в этом прогоне не наблюдался;
+  при необходимости воспроизводится отложенным источником/инъекцией задержки в mock.
+- **Отмена** (`QLCancelQuery`) и гард на произвольную отмену (см. §4.5 концепции).
+- Живой **`Auth.Login`** против отдельного auth-мока.
+- Сборка/прогон на **Windows и Linux** (PoC выполнен на macOS).
 
 ## Рекомендации
 

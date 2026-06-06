@@ -25,20 +25,21 @@ Qt-клиент общается с сервером по gRPC (сервисы `
 
 ## Решение
 
-**Принят QtGrpc + QtProtobuf.** Подтверждено PoC (flow A end-to-end против
+**Принят QtGrpc + QtProtobuf.** Подтверждено PoC (flows **A, C, D** end-to-end против
 `synaps_mock_server`): кодогенерация из `ddbs_proto`, cleartext HTTP/2 (h2c),
 async без блокировки UI (event loop + сигналы `QGrpcCallReply::finished`, без
 worker-потоков), `user-token` в метаданных, корректный разбор
-`QueryResponse`/`QueryFact` и `QueryExecutionStatus` из `data[]`. Модули и
+`QueryResponse`/`QueryFact`/`QueryFactCollection` и `QueryExecutionStatus` из `data[]`,
+выборка данных (`QLOntologies` + цикл `QLFetch`) с **EOF = `OUT_OF_RANGE`**. Модули и
 кодогенераторы (`qtprotobufgen`/`qtgrpcgen`) доступны «из коробки» в Qt 6.10/6.11.
 
 **Async-модель (закрывает Q2):** унарные вызовы → `std::unique_ptr<QGrpcCallReply>`,
 результат сигналом `finished(QGrpcStatus)` в потоке UI; цепочка flow собирается
 последовательными обработчиками. Потоковый Fetch и polling ложатся на ту же модель.
 
-Не покрыто PoC (следующие инкременты): flow C/D с `QLOntologies`/`QLFetch` и EOF
-(`OUT_OF_RANGE`), живой `Auth.Login` (mock не реализует Auth-сервис), сборка на
-Windows/Linux.
+Не покрыто PoC (следующие инкременты): polling с реальным `Executing` (flow D сошёлся
+за одну итерацию — старт всегда `QLExecuteDirect`), отмена (`QLCancelQuery`), живой
+`Auth.Login` (отдельный auth-мок, опционален), сборка на Windows/Linux.
 
 ## Последствия
 
