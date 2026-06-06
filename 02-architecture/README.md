@@ -1,17 +1,21 @@
 # Архитектура (фаза 2)
 
-> **Статус:** стаб. Наполняется в фазе архитектуры на основе
+> Наполняется в фазе архитектуры на основе
 > [00-overview/architecture-concept.md](../00-overview/architecture-concept.md).
 
-## Что здесь появится
+## Документы
 
-Детальный дизайн на основе направления из §7 документа-концепции:
+| Документ | Статус |
+|---|---|
+| [poc-grpc-notes.md](poc-grpc-notes.md) — PoC QtGrpc (flows A/C/D) | ✅ выполнено |
+| [query-manager-and-transport.md](query-manager-and-transport.md) — дизайн QueryManager + SynapsTransport + Query + QueryStore | дизайн v1 |
 
-- Контракты и интерфейсы ключевых компонентов: **QueryManager**, **Query**,
-  **QueryStore**, **TabManager**, **SynapsTransport**, **AuthService**, ViewModels.
-- Диаграммы: компонентов, последовательностей (flow A–D), состояний запроса.
-- Маппинг proto ↔ домен; модель async; схема персистенции.
+## Что ещё появится
+
+- **TabManager** — детальный дизайн (отдельный документ).
+- **AuthTransport / AuthService** под QtGrpc.
+- Поэкранные ViewModel'и (начиная с SQL Query как вертикального среза).
 - Структура каталогов C++/QML, правила композиции/DI.
-- Решения по открытым вопросам (см. [adr/](../adr/)).
+- Диаграммы компонентов; решения по открытым вопросам (см. [adr/](../adr/)).
 
 После этой фазы — план работ и выполнение.
