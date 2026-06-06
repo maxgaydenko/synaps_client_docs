@@ -16,9 +16,10 @@
   в `QueryRequest.text` во всех последующих вызовах цепочки.
 - **Flow** — сценарий выполнения: `executeDirect` (A), `execute` (B), `fetchDirect`
   (C), `fetch` (D). Оси: с выборкой / без; direct / non-direct.
-- **Direct / Non-direct** — direct: старт `QLExecuteDirect`, статус готов почти
-  сразу. Non-direct: `QLPrepare`+`QLExecute` (или `QLExecuteDirect` как в POC),
-  требуется polling статуса.
+- **Direct / Non-direct** — оба стартуют через `QLExecuteDirect` (`QLPrepare` не
+  используем — решение принято, как в POC). Direct: `QLQueryStatus` читается один
+  раз (статус готов почти сразу). Non-direct: `QLQueryStatus` в режиме polling до
+  завершения.
 - **QueryExecutionStatus** — статус выполнения `Executing | Failed | Completed`.
   Приходит **внутри `QueryFact.data[]`** парой `key=QueryExecutionStatus` (читать
   регистронезависимо).

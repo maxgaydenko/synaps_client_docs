@@ -151,9 +151,9 @@ auth-состояние — быть доступно транспорту це�
 | RPC | Request → Response | Роль в flow |
 |---|---|---|
 | `QLProjects` | `QueryRequest → QueryResponse` | Список проектов (частный случай). |
-| `QLExecuteDirect` | `QueryRequest → QueryResponse` | Старт **direct**-запроса, возвращает `queryId`. |
-| `QLPrepare` | `QueryRequest → QueryResponse` | Подготовка **non-direct**-запроса. |
-| `QLExecute` | `QueryRequest → QueryResponse` | Запуск подготовленного запроса. |
+| `QLExecuteDirect` | `QueryRequest → QueryResponse` | **Единственная точка старта** любого запроса, возвращает `queryId`. |
+| `QLPrepare` | `QueryRequest → QueryResponse` | Подготовка запроса. **В клиенте не используется** (см. [§4.3](#43-direct-vs-non-direct)). |
+| `QLExecute` | `QueryRequest → QueryResponse` | Запуск подготовленного запроса. **В клиенте не используется.** |
 | `QLQueryStatus` | `QueryRequest(queryId) → QueryFact` | Статус выполнения; источник `QueryExecutionStatus`. |
 | `QLOntologies` | `QueryRequest(queryId) → QueryFactCollection` | Описание колонок результата. |
 | `QLFetch` | `QueryRequest(queryId) → QueryFact` | Очередная строка данных; EOF сигнализируется ошибкой. |
@@ -191,14 +191,19 @@ QueryFactCollection { repeated QueryFact rows; }
 
 ### 4.3 Direct vs Non-direct
 
-- **Direct** — старт через `QLExecuteDirect`. Сервер начинает выполнение сразу;
-  статус, как правило, готов к моменту первого `QLQueryStatus`.
-- **Non-direct** — старт через пару `QLPrepare` → `QLExecute`. Выполнение может
-  быть длительным, поэтому требуется **polling** `QLQueryStatus` до завершения.
+**Решение (принято):** `QLPrepare` пока **не используем**. Оба варианта стартуют
+через **`QLExecuteDirect`** — как в POC. Различие direct/non-direct сводится **только
+к стратегии чтения статуса**:
 
-> POC для упрощения в обоих случаях стартует через `QLExecuteDirect`; финальное
-> решение по `Prepare/Execute` для non-direct — на фазе архитектуры. Принципиально
-> для нас отличие direct/non-direct = «статус готов сразу» vs «нужен polling».
+- **Direct** — `QLExecuteDirect`, затем `QLQueryStatus` читается **один раз** (статус,
+  как правило, уже готов).
+- **Non-direct** — `QLExecuteDirect`, затем `QLQueryStatus` в режиме **polling** до
+  завершения (`Executing` → повтор через интервал).
+
+> Таким образом, в обоих случаях старт идентичен (`QLExecuteDirect`), и принципиальное
+> отличие direct/non-direct = «статус читаем один раз» vs «нужен polling».
+> `QLPrepare`/`QLExecute` остаются в proto, но в клиенте не задействованы (при
+> необходимости вернёмся к ним отдельным решением).
 
 ### 4.4 Четыре flow
 
@@ -223,7 +228,7 @@ QueryFactCollection { repeated QueryFact rows; }
 #### B. Non-direct без выборки — `execute`
 
 ```
-1. (QLPrepare/QLExecute или QLExecuteDirect)(SQL) → queryId
+1. QLExecuteDirect(SQL) → queryId
 2. QLQueryStatus(queryId) → QueryFact           // {1..n} раз: пока status == Executing
 3. QLCloseQuery(queryId) → ok
 ```
@@ -246,7 +251,7 @@ QueryFactCollection { repeated QueryFact rows; }
 #### D. Non-direct с выборкой — `fetch`
 
 ```
-1. (старт)(SQL) → queryId
+1. QLExecuteDirect(SQL) → queryId
 2. QLQueryStatus(queryId) → QueryFact            // {1..n} раз: polling как в B
 3. QLOntologies(queryId) → QueryFactCollection   // после Completed
 4. QLFetch(queryId) → QueryFact                  // {1..r} раз, до EOF
@@ -285,8 +290,12 @@ QueryFactCollection { repeated QueryFact rows; }
   семантические (`NOT_FOUND`, `UNAUTHENTICATED`).
 - **Экспоненциальный backoff** (в POC: ~1с → 2с → 5с).
 - **Отмена** запроса (`QLCancelQuery` + `QLCloseQuery`).
-- Опционально — **восстановление** незавершённых запросов после рестарта
-  (в POC состояние сохранялось в Hive). Нужно ли это в Qt — см. [§9](#9-открытые-вопросы--кандидаты-в-adr).
+- **Восстановление незавершённых запросов после рестарта — закладываем сразу**
+  (как в POC, где состояние сохранялось в Hive). Состояние запроса
+  (`queryId`, SQL, `QueryKind`, subject, фаза, последний статус) персистится, чтобы
+  после перезапуска приложения QueryManager мог переподключиться к выполняющемуся
+  запросу или корректно его завершить. Это влияет на дизайн **QueryStore** и
+  жизненного цикла Query — см. [§5.2](#52-querymanager) и [§7.1](#71-слои-и-крупные-компоненты).
 
 ---
 
@@ -443,7 +452,7 @@ Data / Transport                — gRPC-клиенты (Auth, DHGDBSharedAPI), 
 | F10 | Просмотр источника с действиями **CREATE METADATA / CREATE SOURCE INDEX** (длительные запросы flow B/D с лоадерами по подписке). |
 | F11 | **Персистенция** открытых табов между запусками. |
 | F12 | **Отмена** выполняющегося запроса из UI. |
-| F13 | (Опц.) **Восстановление** незавершённых запросов после рестарта — решается в [§9](#9-открытые-вопросы--кандидаты-в-adr). |
+| F13 | **Восстановление незавершённых запросов после рестарта** — закладываем сразу. Состояние запросов персистится; после перезапуска QueryManager переподключается к выполняющимся запросам или корректно их завершает. |
 
 ### 6.2 Нефункциональные
 
@@ -587,16 +596,17 @@ Data / Transport                — gRPC-клиенты (Auth, DHGDBSharedAPI), 
 
 ## 9. Открытые вопросы / кандидаты в ADR
 
-Решаются в фазе архитектуры (или ранним PoC). Каждый — кандидат в отдельный ADR.
+Открытые (Q1–Q4) решаются в фазе архитектуры (или ранним PoC); каждый — кандидат в
+отдельный ADR. Q5–Q6 уже **приняты** (см. ниже).
 
-| # | Вопрос | Текущая рекомендация |
+| # | Вопрос | Статус / решение |
 |---|---|---|
-| Q1 | **gRPC-стек**: QtGrpc+QtProtobuf vs raw `grpc++`. | **QtGrpc** (нативность, async, QML). Зафиксировано в [adr/0001](../adr/0001-grpc-stack.md). |
-| Q2 | **Async-модель**: Qt-корутины vs callbacks/`QFuture` vs worker-threads. | Решить под выбранный стек; обязателен неблокирующий UI (N2). |
-| Q3 | **Персистенция** табов/истории запросов: `QSettings` vs SQLite vs файлы. | Простое — `QSettings`; табы/история — SQLite или файловый стор. |
-| Q4 | **Реактивность**: чистые signals/slots vs выделенный reactive-слой/event-bus. | Начать с signals/slots + Q_PROPERTY; event-bus для broadcast по subjects. |
-| Q5 | **Восстановление запросов после рестарта** (F13): нужно ли в v1. | Зафиксировать как опциональное; решить по бизнес-приоритету. |
-| Q6 | **Non-direct старт**: `QLPrepare`/`QLExecute` vs `QLExecuteDirect` (как в POC). | Уточнить семантику на сервере; формализовать в [ql-flows.md](../03-protocol/ql-flows.md). |
+| Q1 | **gRPC-стек**: QtGrpc+QtProtobuf vs raw `grpc++`. | Открыт. Рекоменд. **QtGrpc** (нативность, async, QML). Зафиксировано в [adr/0001](../adr/0001-grpc-stack.md). |
+| Q2 | **Async-модель**: Qt-корутины vs callbacks/`QFuture` vs worker-threads. | Открыт. Решить под выбранный стек; обязателен неблокирующий UI (N2). |
+| Q3 | **Персистенция** табов/истории/состояния запросов: `QSettings` vs SQLite vs файлы. | Открыт. Простое (сессия, размеры панелей) — `QSettings`; табы и состояние запросов (нужно для F13) — SQLite или файловый стор. |
+| Q4 | **Реактивность**: чистые signals/slots vs выделенный reactive-слой/event-bus. | Открыт. Начать с signals/slots + Q_PROPERTY; event-bus для broadcast по subjects. |
+| Q5 | **Восстановление запросов после рестарта** (F13). | ✅ **Принято: закладываем сразу.** Состояние запросов персистится; QueryManager переподключается/завершает их после рестарта (см. [§4.5](#45-надёжность-транспорта), [§6.1 F13](#61-функциональные)). Усиливает требование к Q3. |
+| Q6 | **Non-direct старт**: `QLPrepare`/`QLExecute` vs `QLExecuteDirect`. | ✅ **Принято: `QLPrepare` не используем.** Старт всегда `QLExecuteDirect` — как в POC (см. [§4.3](#43-direct-vs-non-direct)). |
 
 ---
 
