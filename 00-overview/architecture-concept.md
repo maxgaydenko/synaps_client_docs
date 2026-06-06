@@ -534,12 +534,14 @@ Data / Transport                — gRPC-клиенты (Auth, DHGDBSharedAPI), 
   как у текущего `AuthService` (`QML_ELEMENT`/`QML_SINGLETON`/`Q_PROPERTY`/
   `Q_INVOKABLE`/`Q_ENUM`).
 - **MVVM** как основной паттерн связки C++↔QML.
-- **gRPC: рекомендуется QtGrpc + QtProtobuf** (нативно ложится на QObject/сигналы,
-  упрощает async и связку с QML). **Это открытый вопрос** — финальный выбор между
-  QtGrpc и raw `grpc++` фиксируется в [adr/0001-grpc-stack.md](../adr/0001-grpc-stack.md).
-- **Async-модель** (Qt-корутины vs callbacks vs worker-threads) — решается в фазе
-  архитектуры (см. [§9](#9-открытые-вопросы--кандидаты-в-adr)); требование N2 (не
-  блокировать UI) обязательно.
+- **gRPC: QtGrpc + QtProtobuf** (принято, подтверждено PoC — нативно ложится на
+  QObject/сигналы, h2c без TLS для локали, async без worker-потоков). См.
+  [adr/0001](../adr/0001-grpc-stack.md) и
+  [PoC-заметки](../02-architecture/poc-grpc-notes.md). Caveat: фиксировать **одну
+  версию Qt** в build/CI (нельзя смешивать codegen и runtime разных Qt).
+- **Async-модель** (принято, подтверждено PoC): event loop + сигналы
+  `QGrpcCallReply::finished`, без worker-потоков; цепочкой flow владеет QueryManager.
+  Требование N2 (не блокировать UI) выполняется.
 - **Персистенция** (решение принято): `QSettings` — для простого состояния (сессия,
   размеры панелей); **файловый стор** — для табов, истории и состояния запросов
   (нужно для F13). Стор **отдельный для каждого пользователя**: данные одного
@@ -618,13 +620,13 @@ Data / Transport                — gRPC-клиенты (Auth, DHGDBSharedAPI), 
 
 ## 9. Открытые вопросы / кандидаты в ADR
 
-Открытые (Q1–Q4) решаются в фазе архитектуры (или ранним PoC); каждый — кандидат в
-отдельный ADR. Q5–Q6 уже **приняты** (см. ниже).
+Открыт остаётся только Q4. Q1–Q3, Q5–Q6 **приняты** (Q1/Q2 — подтверждены PoC,
+см. [02-architecture/poc-grpc-notes.md](../02-architecture/poc-grpc-notes.md)).
 
 | # | Вопрос | Статус / решение |
 |---|---|---|
-| Q1 | **gRPC-стек**: QtGrpc+QtProtobuf vs raw `grpc++`. | Открыт. Рекоменд. **QtGrpc** (нативность, async, QML). Зафиксировано в [adr/0001](../adr/0001-grpc-stack.md). |
-| Q2 | **Async-модель**: Qt-корутины vs callbacks/`QFuture` vs worker-threads. | Открыт. Решить под выбранный стек; обязателен неблокирующий UI (N2). |
+| Q1 | **gRPC-стек**: QtGrpc+QtProtobuf vs raw `grpc++`. | ✅ **Принято: QtGrpc** — подтверждено PoC (flow A end-to-end, h2c, async, `user-token`). См. [adr/0001](../adr/0001-grpc-stack.md). Caveat: фиксировать одну версию Qt в build/CI. |
+| Q2 | **Async-модель**: Qt-корутины vs callbacks/`QFuture` vs worker-threads. | ✅ **Принято: event loop + сигналы `QGrpcCallReply::finished`**, без worker-потоков; цепочкой flow владеет QueryManager. Подтверждено PoC. |
 | Q3 | **Персистенция** табов/истории/состояния запросов: `QSettings` vs SQLite vs файлы. | ✅ **Принято: файловый стор** для табов/истории/состояния запросов (`QSettings` — только для простого состояния). Стор **отдельный для каждого пользователя**. SQLite — возможный переход позже, за абстракцией стора (см. [§7.2](#72-технологические-рекомендации)). |
 | Q4 | **Реактивность**: чистые signals/slots vs выделенный reactive-слой/event-bus. | Открыт. Начать с signals/slots + Q_PROPERTY; event-bus для broadcast по subjects. |
 | Q5 | **Восстановление запросов после рестарта** (F13). | ✅ **Принято: закладываем сразу.** Состояние запросов персистится; QueryManager переподключается/завершает их после рестарта (см. [§4.5](#45-надёжность-транспорта), [§6.1 F13](#61-функциональные)). Усиливает требование к Q3. |

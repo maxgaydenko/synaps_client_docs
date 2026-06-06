@@ -1,6 +1,7 @@
 # ADR 0001 — Стек gRPC для Qt-клиента
 
-**Статус:** Proposed (открытый вопрос; финальное решение — после PoC в фазе архитектуры)
+**Статус:** ✅ Accepted (2026-06-06) — подтверждено PoC.
+См. [02-architecture/poc-grpc-notes.md](../02-architecture/poc-grpc-notes.md).
 
 ## Контекст
 
@@ -22,18 +23,31 @@ Qt-клиент общается с сервером по gRPC (сервисы `
    - **−** Больше ручной работы по связке с UI-потоком, маршалингу в QObject,
      управлению потоками; отдельная сборочная интеграция.
 
-## Решение (предварительно)
+## Решение
 
-**Рекомендуется QtGrpc + QtProtobuf.** Окончательно подтвердить небольшим **PoC**:
-вызов `Auth.Login` и одного QL-flow (например, `executeDirect`) против
-`synaps_mock_server`, с проверкой: async без блокировки UI, прикрепление
-`user-token`, потоковая выборка (`QLFetch`), сборка на трёх платформах.
+**Принят QtGrpc + QtProtobuf.** Подтверждено PoC (flow A end-to-end против
+`synaps_mock_server`): кодогенерация из `ddbs_proto`, cleartext HTTP/2 (h2c),
+async без блокировки UI (event loop + сигналы `QGrpcCallReply::finished`, без
+worker-потоков), `user-token` в метаданных, корректный разбор
+`QueryResponse`/`QueryFact` и `QueryExecutionStatus` из `data[]`. Модули и
+кодогенераторы (`qtprotobufgen`/`qtgrpcgen`) доступны «из коробки» в Qt 6.10/6.11.
+
+**Async-модель (закрывает Q2):** унарные вызовы → `std::unique_ptr<QGrpcCallReply>`,
+результат сигналом `finished(QGrpcStatus)` в потоке UI; цепочка flow собирается
+последовательными обработчиками. Потоковый Fetch и polling ложатся на ту же модель.
+
+Не покрыто PoC (следующие инкременты): flow C/D с `QLOntologies`/`QLFetch` и EOF
+(`OUT_OF_RANGE`), живой `Auth.Login` (mock не реализует Auth-сервис), сборка на
+Windows/Linux.
 
 ## Последствия
 
-- Под выбранный стек проектируется слой **Data/Transport** (`SynapsTransport`) и
-  модель async (см. открытый вопрос Q2 в концепции).
-- Решение влияет на CMake-зависимости и генерацию кода из `ddbs_proto`.
+- Слой **Data/Transport** (`SynapsTransport`) строится на QtGrpc; async-модель —
+  event loop + сигналы (Q2 закрыт).
+- CMake: `qt_add_protobuf` + `qt_add_grpc(CLIENT)` из `ddbs_proto`; зависимости
+  `Qt6::Protobuf`/`Qt6::Grpc`.
+- **Зафиксировать одну версию Qt** в build/CI — нельзя смешивать codegen из одного
+  Qt с runtime из другого (детали и обход package-registry — в PoC-заметках).
 
 ## Связи
 
