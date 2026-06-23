@@ -519,7 +519,7 @@ Data / Transport                — gRPC-клиенты (Auth, DHGDBSharedAPI), 
 
 | Компонент | Ответственность |
 |---|---|
-| **AuthService** | Логин/сессия/профиль; владеет токеном; уже есть в каркасе (расширить под gRPC). |
+| **AuthService** | Логин/сессия/профиль; владеет токеном; **реализован под gRPC** (`Auth.Login`/`Auth.User` через `AuthTransport`), токен прокидывается в `QueryManager` → header `user-token`. |
 | **SynapsTransport** | Единственный канал к `DHGDBSharedAPI`; прикрепляет `user-token`; преобразует RPC ↔ домен. |
 | **QueryManager** | Запуск/жизненный цикл запросов по flow; реестр; `QueryKind`; маршрутизация событий по subjects. |
 | **Query** | Наблюдаемое состояние одной операции (фаза/статус/прогресс/ошибка/онтологии/строки). |
@@ -598,7 +598,7 @@ Data / Transport                — gRPC-клиенты (Auth, DHGDBSharedAPI), 
     QueryManager).
 
 Прообраз — `widgets/layout/` из POC (`layout_panel_{top,left,right,bottom}_widget`,
-`layout_tabs_widget`). В каркасе `synaps_client/HomePage.qml` уже есть набросок
+`layout_tabs_widget`). В каркасе `synaps_client/src/qml/HomePage.qml` уже есть набросок
 скрываемых панелей с перетаскиванием границ.
 
 ### 8.2 Экраны (из POC)
@@ -613,7 +613,7 @@ Data / Transport                — gRPC-клиенты (Auth, DHGDBSharedAPI), 
 | **Project** | DDB-проект: граф + схема, метрики. | Средний |
 | **Project Branch** | Ветка проекта (подмножество узлов). | Средний |
 | **RDB Project** | RDB-проект: таблицы/данные. | Средний |
-| **Login** | Авторизация. | Готово (каркас) |
+| **Login** | Авторизация. | Готово (gRPC `Auth` через `AuthTransport`/`AuthService`) |
 | **Error / Loading** | Системные состояния. | По мере надобности |
 
 ---

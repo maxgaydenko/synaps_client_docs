@@ -1,8 +1,10 @@
 # Архитектура: QueryManager + SynapsTransport
 
-> **Статус:** дизайн v1 · **Фаза:** архитектура (детальный дизайн) · **Дата:** 2026-06-06
+> **Статус:** дизайн v1 — **реализован и верифицирован** (флоу A/C/D + подписка) ·
+> **Фаза:** архитектура (детальный дизайн) · **Дата:** 2026-06-06
 > **Вход:** [концепция §4–§5, §7](../00-overview/architecture-concept.md) ·
 > [PoC QtGrpc](poc-grpc-notes.md) · [ADR-0001](../adr/0001-grpc-stack.md)
+> **Реализация:** см. [§14 Статус реализации](#14-статус-реализации-v1)
 
 Детальный дизайн **доменного слоя работы с запросами** и **слоя транспорта**. Это
 первый компонент фазы архитектуры: выносим логику из PoC-`SynapsClient` в правильные
@@ -28,6 +30,7 @@ reactive-библиотеки**.
 11. [Диаграммы последовательностей](#11-диаграммы-последовательностей)
 12. [Связь с ViewModel/QML](#12-связь-с-viewmodelqml)
 13. [Открытые вопросы этого дизайна](#13-открытые-вопросы-этого-дизайна)
+14. [Статус реализации (v1)](#14-статус-реализации-v1)
 
 ---
 
@@ -600,6 +603,57 @@ reattach (возобновляем polling/fetch). Иначе → F13 = best-eff
 **Вывод для дизайна:** F13 = **живой reattach при рестарте клиента** (пока жив сервер),
 наиболее ценный для долгих **no-result** операций; перезапуск сервера и result-flow
 в середине выборки → best-effort финализация. Зафиксировано в [§9](#9-querystore-и-восстановление-после-рестарта-f13).
+
+---
+
+## 14. Статус реализации (v1)
+
+Доменный слой реализован в `synaps_client/src/ql/` и проверен через headless
+self-test против `synaps_mock_server`.
+
+**Файлы:**
+
+| Файл | Содержит |
+|---|---|
+| `src/ql/QlTypes.h` | `QlKeyValue`/`QlFact`/`QlFactCollection`, `QlStatus` (классификация), `QlCallBase`+`QlCall<T>` |
+| `src/ql/QueryTypes.h` | `QueryKind`/`QueryFlow`/`QuerySubject`(+`qHash`)/`QueryRequest` |
+| `src/ql/SynapsTransport.{h,cpp}` | канал QtGrpc + клиент, `user-token`, async-методы QL, proto→DTO, `unauthenticated()` |
+| `src/ql/Query.{h,cpp}` | `Query` (наблюдаемый) + `QueryResultModel` (таблица строк) |
+| `src/ql/QueryManager.{h,cpp}` | `QueryManager` (QML-синглтон), `QuerySubscription`, внутренние `QueryRunner` (flow A–D) и `QueryListModel` |
+| `src/qml/SqlQueryPage.qml` | **Экран SQL Query** — первый UI на доменном стеке |
+| `src/main.cpp` | `--grpc-selftest [--flow A\|B\|C\|D] [--reactive]` через `QueryManager` |
+
+**Проверено (exit 0):**
+- **Flow A** (`executeDirect`, no-result), **C** (`fetchDirect`), **D** (`fetch`,
+  polling) — полный путь через `QueryManager`+`SynapsTransport`+`Query`;
+  онтологии → строки в `Query.rows` → EOF (`OutOfRange`) → `QLCloseQuery`.
+- **Подписка**: `QuerySubscription` на реактивный subject видит переходы
+  `busy: true → false` и `active: yes → no`, **не зная `queryId`** — Observer/PubSub
+  работает (резолюция Q4 подтверждена на практике).
+- `user-token` в метаданных; async без worker-потоков (event loop + сигналы).
+
+**Решения реализации:**
+- `QlCall<T>` — типизированный результат на не-шаблонной `QlCallBase` (moc-friendly:
+  сигнал на базе, `value()` на шаблоне). Транспорт владеет временем жизни
+  `QGrpcCallReply` (parented + `deleteLater` после `finished`) — без цикла захвата.
+- `QueryRunner`/`QueryListModel` — внутренние, без `Q_OBJECT` (только контекст-получатели).
+
+**UI (первый экран — SQL Query):**
+- `QueryManager` зарегистрирован как **QML-синглтон** (`QML_SINGLETON`), `Query` —
+  uncreatable QML-тип; QML-методы `runAdhoc(sql, flow)` / `cancel(query)`.
+- `SqlQueryPage.qml`: поле SQL, выбор flow (A/B/C/D), Run/Cancel, статус
+  (phase/executionStatus/queryId), таблица результатов (`TableView` ↔ `Query.rows`),
+  индикатор загрузки (`BusyIndicator ↔ Query.running`). Встроен в центральную область
+  `HomePage`. Запрос — `AdhocSql` (`reactive=false`).
+- Проверено: чистая сборка (qmlcachegen) + загрузка без QML-ошибок (offscreen).
+  Визуальная проверка — на машине с дисплеем (login `ma`/`x` → экран).
+
+**Отложено (следующие инкременты):**
+- **QueryStore + восстановление (F13, §9)** — персистенция и reattach не реализованы.
+- **`queriesModel()`** — минимальный (display-строка); роли/`roleNames` для Query Logs — позже.
+- **Отмена**: `QueryManager::cancel()` + cancel-гард реализованы, но ещё не покрыты
+  тестом (mock завершает запросы мгновенно — не успеть отменить).
+- PoC-`SynapsClient` теперь **вытеснен** этим стеком; оставлен в дереве как референс.
 
 ---
 

@@ -8,12 +8,13 @@
 | Документ | Статус |
 |---|---|
 | [poc-grpc-notes.md](poc-grpc-notes.md) — PoC QtGrpc (flows A/C/D) | ✅ выполнено |
-| [query-manager-and-transport.md](query-manager-and-transport.md) — дизайн QueryManager + SynapsTransport + Query + QueryStore | дизайн v1 |
+| [query-manager-and-transport.md](query-manager-and-transport.md) — дизайн QueryManager + SynapsTransport + Query + QueryStore | дизайн v1 ✅ реализован (A/C/D + подписка) |
+| **AuthTransport + AuthService** под QtGrpc (`Auth.Login`/`Auth.User`) | ✅ реализован (без отдельного дизайн-документа) |
+| **AppConfig** — JSON-конфиг connection-параметров (`endpoint`/`deadlineMs` на сервис) | ✅ реализован; приоритет `defaults < файл < env`, путь `--config`/`./synaps.config.json`/`AppConfigLocation` |
 
 ## Что ещё появится
 
 - **TabManager** — детальный дизайн (отдельный документ).
-- **AuthTransport / AuthService** под QtGrpc.
 - Поэкранные ViewModel'и (начиная с SQL Query как вертикального среза).
 - Структура каталогов C++/QML, правила композиции/DI.
 - Диаграммы компонентов; решения по открытым вопросам (см. [adr/](../adr/)).
